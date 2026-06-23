@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import logo from "../../assets/icons/logo-clinica.png";
+import logo from "../../assets/icons/logo-clinica-cut.png";
 /**
  * Barra de navegación principal.
  * Visible en todas las páginas públicas.
@@ -47,10 +47,21 @@ const Navbar = () => {
                     <img
                         src={logo}
                         alt="Salud Integral"
-                        className="h-20
+                        className="h-16
                                     w-auto
                                     object-contain"
                     />
+                    <span
+                        className="
+                                    text-[#003f87]
+                                    font-bold
+                                    text-lg
+                                    md:text-xl
+                                    lg:text-2xl
+                                "
+                    >
+                        Salud Integral
+                    </span>
                 </Link>
 
 
