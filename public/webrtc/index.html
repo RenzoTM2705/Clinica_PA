@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prueba WebRTC - JsSIP (Depuración)</title>
+    <script src="jssip.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background-color: #f4f7f6;
+        margin: 0;
+      }
+      .container {
+        background: white;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        text-align: center;
+      }
+      button {
+        padding: 12px 24px;
+        font-size: 16px;
+        font-weight: bold;
+        color: white;
+        background-color: #2ecc71;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      button:hover { background-color: #27ae60; }
+      button:disabled { background-color: #7f8c8d; cursor: not-allowed; }
+      #estado { margin-top: 15px; font-weight: bold; color: #7f8c8d; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Llamada WebRTC (Extensión 1002)</h2>
+      <button id="btnLlamar" onclick="controlarLlamada()">Llamar al *43</button>
+      <div id="estado">Desconectado</div>
+    </div>
+
+    <audio id="remoteAudio" autoplay playsinline></audio>
+
+    <script>
+      JsSIP.debug.enable("JsSIP:*");
+
+      var configuracion = {
+        wsServer: "ws://159.112.142.234:8088/ws",
+        sipUri: "sip:1002@159.112.142.234",
+        password: "Clave1002Test",
+        authorization_user: "1002",
+        realm: "asterisk",
+        destino: "sip:*43@159.112.142.234",
+      };
+
+      let ua        = null;
+      let miLlamada = null;
+
+      const btnLlamar = document.getElementById("btnLlamar");
+      const txtEstado = document.getElementById("estado");
+
+      // ─── Función central para conectar el audio ──────────────────────────
+      // Se llama desde varios eventos para garantizar que el audio se conecte
+      // sin importar el orden en que lleguen track / addstream / confirmed.
+      function conectarAudio(pc) {
+        const remoteAudio = document.getElementById("remoteAudio");
+
+        // Método 1 — moderno: evento "track" del RTCPeerConnection
+        // Se dispara cuando llega cada track remoto negociado por ICE/DTLS.
+        pc.addEventListener("track", (e) => {
+          console.log("🎵 [track] Kind:", e.track.kind, "| State:", e.track.readyState);
+
+          // ✅ Usar e.streams[0] si viene con stream; si no, construir uno manual
+          const stream = (e.streams && e.streams[0])
+            ? e.streams[0]
+            : new MediaStream([e.track]);
+
+          remoteAudio.srcObject = stream;
+          remoteAudio.play()
+            .then(() => console.log("🎉 [track] Audio reproduciéndose"))
+            .catch((err) => console.error("❌ [track] Play bloqueado:", err));
+        });
+
+        // Método 2 — legacy: evento "addstream" (deprecated pero más robusto
+        // con Asterisk porque se dispara aunque ICE todavía no esté "connected",
+        // en cuanto el stream remoto está disponible en el PeerConnection).
+        // ❌ ORIGINAL: no existía este listener — por eso no sonaba nada cuando
+        //    "track" no se disparaba por ICE incompleto.
+        pc.addEventListener("addstream", (e) => {
+          console.log("🎵 [addstream] Stream recibido:", e.stream.id);
+          remoteAudio.srcObject = e.stream;
+          remoteAudio.play()
+            .then(() => console.log("🎉 [addstream] Audio reproduciéndose"))
+            .catch((err) => console.error("❌ [addstream] Play bloqueado:", err));
+        });
+      }
+
+      try {
+        const socket = new JsSIP.WebSocketInterface(configuracion.wsServer);
+
+        const configJsSIP = {
+          sockets:            [socket],
+          uri:                configuracion.sipUri,
+          password:           configuracion.password,
+          authorization_user: configuracion.authorization_user,
+          realm:              configuracion.realm,
+          register:           true,
+          // ✅ AÑADIDO: "INVITE" es más compatible con FPBX-15/Asterisk 17
+          // que el valor por defecto "UPDATE".
+          session_timers_refresh_method: "INVITE",
+        };
+
+        ua = new JsSIP.UA(configJsSIP);
+
+        ua.on("connecting",         () => { txtEstado.innerText = "Conectando al WebSocket..."; txtEstado.style.color = "#f39c12"; });
+        ua.on("connected",          () => { txtEstado.innerText = "WebSocket Conectado";         txtEstado.style.color = "#2980b9"; });
+        ua.on("registered",         () => { txtEstado.innerText = "Extensión 1002 Registrada ✓"; txtEstado.style.color = "#2ecc71"; });
+        ua.on("registrationFailed", (e) => { txtEstado.innerText = "Error de Registro";          txtEstado.style.color = "#c0392b"; console.error("❌ Registro fallido:", e); });
+
+        ua.start();
+      } catch (error) {
+        console.error("❌ Error inicializando JsSIP:", error);
+      }
+
+      var controlarLlamada = function () {
+        if (!ua) return;
+
+        if (miLlamada && !miLlamada.isEnded()) {
+          miLlamada.terminate();
+          return;
+        }
+
+        const opcionesLlamada = {
+          mediaConstraints:    { audio: true, video: false },
+          rtcOfferConstraints: { offerToReceiveAudio: 1, offerToReceiveVideo: 0 },
+          pcConfig: {
+            // ✅ iceTransportPolicy: "relay" — FUERZA el uso del servidor TURN.
+            // Sin esto, Chrome intenta primero candidatos host/srflx y si Asterisk
+            // solo tiene IPs internas (10.x, 172.x), ICE nunca llega a "connected"
+            // y el evento "track" nunca se dispara.
+            // ❌ ORIGINAL: no existía esta línea — ICE intentaba candidatos
+            //    directos que nunca funcionan contra las IPs internas de Asterisk.
+            iceTransportPolicy: "relay",
+            iceServers: [
+              { urls: "stun:stun.l.google.com:19302" },
+              { urls: "stun:159.112.142.234:3478" },
+              {
+                urls:       "turn:159.112.142.234:3478",
+                username:   "asterisk",
+                credential: "turn123",
+              },
+            ],
+          },
+          rtcOfferConstraints: { offerToReceiveAudio: 1, offerToReceiveVideo: 0 },
+        };
+
+        miLlamada = ua.call(configuracion.destino, opcionesLlamada);
+
+        btnLlamar.innerText             = "Colgar";
+        btnLlamar.style.backgroundColor = "#c0392b";
+
+        miLlamada.on("progress", () => {
+          txtEstado.innerText   = "Llamando...";
+          txtEstado.style.color = "#f39c12";
+        });
+
+        miLlamada.on("peerconnection", (data) => {
+          const pc = data.peerconnection;
+          console.log("📡 RTCPeerConnection creado");
+
+          // Registrar listeners de audio (track + addstream)
+          conectarAudio(pc);
+
+          // Monitor ICE — crítico para saber si el problema es de red
+          pc.addEventListener("iceconnectionstatechange", () => {
+            console.log("🧊 ICE state:", pc.iceConnectionState);
+            if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+              console.error("❌ ICE falló — el servidor TURN puede estar caído o mal configurado.");
+            }
+            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+              console.log("✅ ICE conectado — el audio debería funcionar");
+              pc.getStats().then((stats) => {
+                stats.forEach((r) => {
+                  if (r.type === "candidate-pair" && r.nominated)
+                    console.log("🏆 Par ICE ganador:", JSON.stringify(r));
+                });
+              });
+            }
+          });
+
+          pc.addEventListener("icegatheringstatechange", () => {
+            console.log("🔍 ICE gathering:", pc.iceGatheringState);
+          });
+        });
+
+        miLlamada.on("confirmed", () => {
+          txtEstado.innerText   = "En llamada con el *43...";
+          txtEstado.style.color = "#2ecc71";
+          console.log("✅ Llamada confirmada");
+
+          // ✅ Intento adicional de conectar audio desde confirmed,
+          // por si addstream/track llegaron antes de que confirmed se emitiera.
+          const pc = miLlamada.connection;
+          const remoteAudio = document.getElementById("remoteAudio");
+
+          if (!remoteAudio.srcObject) {
+            console.warn("⚠️ srcObject vacío en confirmed — intentando getReceivers()");
+            const receivers = pc.getReceivers();
+            if (receivers.length > 0) {
+              const stream = new MediaStream(receivers.map(r => r.track).filter(Boolean));
+              remoteAudio.srcObject = stream;
+              remoteAudio.play()
+                .then(() => console.log("🎉 [confirmed fallback] Audio reproduciéndose"))
+                .catch((err) => console.error("❌ [confirmed fallback] Play bloqueado:", err));
+            }
+          }
+
+          // Monitor RTP cada 3 segundos
+          const statsInterval = setInterval(() => {
+            if (!miLlamada || miLlamada.isEnded()) {
+              clearInterval(statsInterval);
+              return;
+            }
+            miLlamada.connection.getStats().then((stats) => {
+              stats.forEach((r) => {
+                if (r.type === "inbound-rtp")
+                  console.log(`📊 RTP entrada: paquetes=${r.packetsReceived}, perdidos=${r.packetsLost}, bytes=${r.bytesReceived}`);
+                if (r.type === "outbound-rtp")
+                  console.log(`📤 RTP salida: paquetes=${r.packetsSent}, bytes=${r.bytesSent}`);
+              });
+            });
+          }, 3000);
+        });
+
+        miLlamada.on("failed", (e) => {
+          txtEstado.innerText   = `Llamada fallida: ${e.cause}`;
+          txtEstado.style.color = "#c0392b";
+          restablecerBoton();
+          console.error("❌ Fallo de llamada:", e);
+        });
+
+        miLlamada.on("ended", () => {
+          txtEstado.innerText   = "Llamada terminada";
+          txtEstado.style.color = "#7f8c8d";
+          // ✅ AÑADIDO: limpiar el stream al colgar para no dejar el <audio>
+          // con un stream muerto entre llamadas.
+          const remoteAudio = document.getElementById("remoteAudio");
+          remoteAudio.srcObject = null;
+          restablecerBoton();
+          console.log("🏁 Llamada finalizada.");
+        });
+      };
+
+      function restablecerBoton() {
+        btnLlamar.innerText             = "Llamar al *43";
+        btnLlamar.style.backgroundColor = "#2ecc71";
+        miLlamada = null;
+      }
+    </script>
+  </body>
+</html>

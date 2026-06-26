@@ -1,24 +1,26 @@
+import { useNavigate } from "react-router-dom";
+
 import LoginHeader from "../components/login/LoginHeader";
 import FacialScanner from "../components/login/FacialScanner";
-import ProgressSection from "../components/login/ProgressSection";
-import ProcessSteps from "../components/login/ProcessSteps";
 import RecordButton from "../components/login/RecordButton";
 
 import { useFacialScanner } from "../hooks/useFacialScanner";
 
 const Login = () => {
-    const {
-        videoRef,
-        isRecording,
-        progress,
-        status,
-        cameraAccess,
-        startRecording,
-    } = useFacialScanner();
+  const navigate = useNavigate();
 
-    return (
-        <div
-            className="
+  const { videoRef, isRecording, recognized, message, snapshot, doctorName } =
+    useFacialScanner();
+
+  const handleContinue = () => {
+    localStorage.setItem("doctor", doctorName);
+
+    navigate("/webrtc");
+  };
+
+  return (
+    <div
+      className="
                 min-h-screen
                 flex
                 justify-center
@@ -26,9 +28,9 @@ const Login = () => {
                 px-4
                 bg-slate-50
             "
-        >
-            <div
-                className="
+    >
+      <div
+        className="
                     w-full
                     max-w-xl
                     bg-white
@@ -36,32 +38,65 @@ const Login = () => {
                     shadow-lg
                     p-10
                     space-y-8
-                    relative
                 "
+      >
+        <LoginHeader
+          status={
+            recognized
+              ? "Identidad verificada"
+              : "Posicione su rostro frente a la cámara"
+          }
+        />
+
+        <FacialScanner
+          videoRef={videoRef}
+          isRecording={isRecording}
+          snapshot={snapshot}
+        />
+
+        {recognized && (
+          <div
+            className="
+                            flex
+                            flex-col
+                            items-center
+                            gap-4
+                        "
+          >
+            <h2
+              className="
+                                text-2xl
+                                font-bold
+                                text-green-600
+                            "
             >
-                <LoginHeader status={status} />
+              {message}
+            </h2>
 
-                <FacialScanner
-                    videoRef={videoRef}
-                    cameraAccess={cameraAccess}
-                    isRecording={isRecording}
-                />
+            <button
+              onClick={handleContinue}
+              className="
+                                px-8
+                                py-3
+                                rounded-lg
+                                bg-[#003f87]
+                                text-white
+                                font-semibold
+                                hover:bg-[#002f67]
+                                transition
+                            "
+            >
+              Continuar
+            </button>
+          </div>
+        )}
 
-                <ProgressSection
-                    progress={progress}
-                    isRecording={isRecording}
-                />
-
-                <ProcessSteps progress={progress} />
-
-                <RecordButton
-                    isRecording={isRecording}
-                    progress={progress}
-                    onClick={startRecording}
-                />
-            </div>
-        </div>
-    );
+        {!recognized && (
+          <RecordButton isRecording={isRecording} onClick={() => {}} />
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default Login;

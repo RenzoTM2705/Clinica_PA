@@ -1,12 +1,10 @@
 interface Props {
     isRecording: boolean;
-    progress: number;
     onClick: () => void;
 }
 
 const RecordButton = ({
     isRecording,
-    progress,
     onClick,
 }: Props) => {
     return (
@@ -21,13 +19,13 @@ const RecordButton = ({
                 text-white
                 font-semibold
                 hover:cursor-pointer
+                disabled:opacity-70
+                disabled:cursor-not-allowed
             "
         >
             {isRecording
-                ? "Grabando..."
-                : progress === 100
-                    ? "Rostro Registrado"
-                    : "Grabar Rostro"}
+                ? "Reconociendo rostro..."
+                : "Iniciar reconocimiento"}
         </button>
     );
 };
